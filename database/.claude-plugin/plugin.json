@@ -1,0 +1,11 @@
+{
+  "name": "zyphryon-database",
+  "description": "Usage guide for Zyphryon Database: asynchronous SQLite and Postgres connections, queries and digests.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Zyphryon"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/Zyphryon/Manual",
+  "repository": "https://github.com/Zyphryon/Manual"
+}

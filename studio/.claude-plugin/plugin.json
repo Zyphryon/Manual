@@ -1,0 +1,11 @@
+{
+  "name": "zyphryon-studio",
+  "description": "Usage guide for Zyphryon Studio, the asset baker: textures, models, sounds and fonts for the engine.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Zyphryon"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/Zyphryon/Manual",
+  "repository": "https://github.com/Zyphryon/Manual"
+}

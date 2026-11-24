@@ -1,0 +1,11 @@
+{
+  "name": "zyphryon-engine",
+  "description": "Usage guide for the Zyphryon engine: scene (ECS), content, graphics, audio, input, jobs, networking and replication.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Zyphryon"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/Zyphryon/Manual",
+  "repository": "https://github.com/Zyphryon/Manual"
+}

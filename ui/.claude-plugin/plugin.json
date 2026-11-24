@@ -1,0 +1,11 @@
+{
+  "name": "zyphryon-ui",
+  "description": "Usage guide for the Zyphryon UI library: themes, layouts, widgets, data binding and actions.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Zyphryon"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/Zyphryon/Manual",
+  "repository": "https://github.com/Zyphryon/Manual"
+}

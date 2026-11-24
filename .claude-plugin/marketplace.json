@@ -1,0 +1,25 @@
+{
+  "name": "zyphryon",
+  "owner": {
+    "name": "Zyphryon"
+  },
+  "description": "Usage guides for the Zyphryon engine, UI, Studio and Database.",
+  "plugins": [
+    {
+      "name": "zyphryon-engine",
+      "source": "./engine"
+    },
+    {
+      "name": "zyphryon-ui",
+      "source": "./ui"
+    },
+    {
+      "name": "zyphryon-studio",
+      "source": "./studio"
+    },
+    {
+      "name": "zyphryon-database",
+      "source": "./database"
+    }
+  ]
+}
