@@ -453,7 +453,7 @@ slot and writing `Output` (`Pass::kNone` for the display). In order:
 | `SetBloom(Bloom { Strength = 0, Threshold = 1 })` | Glow the brightest of the image spills. |
 | `SetBloomScale(Target::Scale)` | Size of the first bloom level. |
 | `SetExposure(Exposure { Auto = false, Level = 1, Minimum = 0.25, Maximum = 4, Curve = ACES })` | Light the image is given and the tone curve. |
-| `SetGrade(Grade { Saturation = 1, Lift, Gamma, Gain, Posterize = 0, Table, Blend = 1 })` | Colour pushes; `Lift`/`Gamma`/`Gain` are `Vector3` pushes from -1 to 1, zero neutral. |
+| `SetGrade(Grade { Saturation = 1, Posterize = 0, Table, Blend = 1 })` | Colour grade; `Table` is a look-up volume and `Blend` the share of it laid over the image. |
 | `SetLens(Lens { Vignette = 0, Grain = 0, Aberration = 0, Cadence = 24 })` | What the glass leaves on the image. |
 | `SetAntialias(Antialias::None / FXAA / Temporal)` | Edge smoothing. |
 | `SetShift(Shift, Scale)` | Where the last image stood, for temporal reprojection. |
