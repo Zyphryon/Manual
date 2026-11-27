@@ -1,9 +1,9 @@
 # Materials
 
 This chapter covers the material JSON the engine reads: as a standalone `.mtl` file, or inline in a model manifest.
-Studio writes materials in two places. The model bake writes one per FBX material inside the `.mdl`. The
-`Studio_Material` library (`Studio::Material::Document`) reads and writes `.mtl` files for a tool or editor. The
-command line has no material command; write `.mtl` files by hand or through the library.
+Studio writes materials in two places. The model bake writes one per FBX material the faces use inside the
+`.mdl`. The `Studio_Material` library (`Studio::Material::Document`) reads and writes `.mtl` files for a tool or
+editor. The command line has no material command; write `.mtl` files by hand or through the library.
 
 ---
 
@@ -87,7 +87,9 @@ A missing `Type` reads as `Float`.
 
 ## 3. Materials inside a model manifest
 
-The model bake (`models.md`) writes one material per FBX material into the `.mdl`'s `Materials` array. Each entry:
+The model bake (`models.md`) writes one material per FBX material the faces use into the `.mdl`'s `Materials`
+array, in the FBX's order. A material no face uses is left out. Faces that name no material share one empty entry,
+`{ "Images": {} }`, written last. Each entry:
 
 - **`Images`** holds every slot the FBX binds a texture to, under the slot name: `Albedo`, `Normal`, `Roughness`,
   `Metallic`, `Specular`, `Emissive`, `Displacement`, `Occlusion`, `Opacity`. Each path is the source image's file
@@ -140,7 +142,7 @@ A re-bake writes the manifest again and loses hand edits. Script the edit, or po
 ```
 
 Then hand edits live in the `.mtl` files. The order still follows the material slots the primitives index, which is
-the FBX's material order.
+the FBX's material order with unused materials left out, and the empty entry for faces without a material last.
 
 ---
 
@@ -238,7 +240,8 @@ if (Studio::Material::Document::Read("Content/Props/Crate.mtl", Loaded))
 }
 ```
 
-`Read` leaves `Output` untouched when the file cannot be read or is not a JSON object.
+`Read` leaves `Output` untouched when the file cannot be read or is not a JSON object. A file whose JSON is broken
+says where: `Material: '<path>' is not valid JSON (<reason>, at line <n>, column <n> ('<key path>'))`.
 
 ---
 
@@ -250,6 +253,7 @@ if (Studio::Material::Document::Read("Content/Props/Crate.mtl", Loaded))
 | A texture or value has no effect | Its name is not one the technique declares | Use the technique's names |
 | Hand edits to a model's materials vanish | The model was baked again | Point the manifest at `.mtl` files, or script the edit |
 | Colour parameter reads black | `Type` left out, so it was read as `Float` | Give `"Type": "Color"` |
+| `is not valid JSON (..., at line N, column M ...)` | A hand edit broke the file | Fix the JSON at that line and column |
 
 ---
 

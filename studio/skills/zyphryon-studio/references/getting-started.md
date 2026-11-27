@@ -39,7 +39,7 @@ Every dependency is fetched by CMake (`FetchContent`). Nothing needs installing 
 | bc7enc_rdo (pinned commit) | `Library/Texture` | BC1 to BC5 (`rgbcx`) and BC7 (`bc7enc`) block encoding |
 | msdfgen `v1.12` | `Library/Font` | Multi-channel signed distance fields |
 | ufbx `v0.23.1` | `Library/Model` | FBX reading |
-| meshoptimizer `v1.3` | `Library/Model` | Vertex welding, cache ordering, simplification |
+| meshoptimizer `v1.3` | `Library/Model` | Welding, dropped triangles, tangents, levels of detail, the shadow weld, draw and vertex order |
 | dr_libs | `Library/Sound` | FLAC, MP3 and WAV decoding |
 | libopus `v1.5.2` | `Library/Sound` | Opus encoding |
 
@@ -79,29 +79,36 @@ Studio <command> <operands> [switches]
 
 ### 3.1 Switch grammar
 
-Switches are parsed by the engine's `Environment` class (`Zyphryon.Base/System/Environment.hpp`). A switch can be
-written four ways:
+Switches are parsed by the engine's `Environment` class (`Zyphryon.Base/System/Environment.hpp`). Before it runs,
+Studio checks every switch against its own table (`Application/Source/Usage.hpp`) and spells each bare toggle as
+`--name=true`. A switch is either a toggle, which takes no value, or a switch that takes one. It can be written
+these ways:
 
 | Spelling | Value |
 |---|---|
-| `--name` | empty, which a toggle reads as `true` |
-| `--name=value` | `value` |
-| `--name value` | `value`, when the next word does not start with `--` |
-| `--no-name` | `false` |
+| `--name` | A toggle reads `true`. A switch that takes a value reads the next word, or nothing when there is none or it starts with `--` |
+| `--name value` | `value`, for a switch that takes a value |
+| `--name=value` | `value`. A toggle takes `true`, `false`, `1` or `0` |
+| `--no-name` | `false`, for a toggle only |
 
-Rules that follow from the parser:
+Rules that follow:
 
-- **Operands go first.** Any word not starting with `--` is an operand, unless the switch before it swallowed it as
-  its value. `Studio bake --wrap rock.png` gives `--wrap` the value `rock.png` and leaves no source.
-- **A toggle followed by an operand eats it.** Write toggles last, or spell them `--mipmaps=true`.
+- **Operands and switches mix in any order.** Any word not starting with `--` is an operand, unless a switch that
+  takes a value read it. `Studio bake --wrap rock.png` bakes `rock.png`.
+- **A toggle never takes the next word.** `--mipmaps false` turns mips on and reads `false` as an operand. Write
+  `--no-mipmaps` or `--mipmaps=false`.
+- **A switch that takes a value reads the next word, whatever it is.** `Studio bake --format rock.png` gives
+  `--format` the value `rock.png`, which is refused.
 - **The last occurrence of a switch wins.** `--format R8UIntNorm --format RGBA8UIntNorm` reads `RGBA8UIntNorm`.
 - **Names are case-insensitive.** `--Mipmaps` is `--mipmaps`.
 - **Enumerated values are case-insensitive** and must spell an enumerator: `--mode array`, `--fit Contain`.
+- **Unknown switches are refused**, and so is a switch the command does not read. Both exit `2` before anything is
+  baked (see 6).
 
 ### 3.2 Defaults
 
-Every default below comes from `Application/Source/Usage.cpp` and the `Profile` structs. `Studio help` prints the
-same list. A bracketed value is the default.
+Every default below comes from the switch table in `Application/Source/Usage.hpp` and the `Profile` structs.
+`Studio help` prints the same list. A bracketed value is the default.
 
 ---
 
@@ -111,9 +118,9 @@ same list. A bracketed value is the default.
 |---|---|---|
 | `help` | none | Prints the usage, exit `0` |
 | `version` | none | Prints the revision of every file Studio writes |
-| `bake` | `<source> [destination]` | Bakes a texture, font, model or sound, picked by the source's extension |
+| `bake` | `<source\|folder>...` and an optional `--output <folder>`, or `<source> <destination>` | Bakes each texture, font, model or sound, picked by its extension |
 | `pack` | `<image\|folder>...` and `--output <tracker.json>` | Packs images into an atlas or an array and writes a tracker |
-| `build` | `<tracker.json>` | Draws a tracker's texture again after its regions were edited |
+| `build` | `<tracker.json>`, exactly one | Draws a tracker's texture again after its regions were edited |
 | `normal` | `<source> [destination]` | Draws a normal map from an image read as a height |
 | `relief` | `<source> [destination]` | Draws a greyscale relief map from an image read as a height |
 | `extract` | `<texture> [destination]` | Writes each slice of a texture as a `.png` |
@@ -121,28 +128,48 @@ same list. A bracketed value is the default.
 
 `--help` and `--version` work as switches too. With `--version` anywhere on the line, Studio prints the version and
 does nothing else. With `--help` anywhere, it prints the usage, does nothing else and exits `0`, `Studio --help` on
-its own included.
+its own included. An unknown switch elsewhere on the line is still refused first, with exit `2`.
 
 ### 4.1 `bake`
 
 ```sh
-Studio bake <source> [destination] [switches]
+Studio bake <source|folder>... [--output <folder>] [switches]
+Studio bake <source> <destination> [switches]
 ```
 
-The source's extension picks the baker, checked in this order:
+Each operand is a source file or a folder. A folder gives every file in it that a baker reads, sorted by name
+case-insensitively. Its subfolders are not listed, and neither are `.tex` files, which a bake writes. Each source's
+extension picks the baker, checked in this order:
 
-| Extensions | Baker | Default destination |
+| Extensions | Baker | Result |
 |---|---|---|
-| `png jpg jpeg tga bmp hdr tex` | Texture | `<source stem>.tex` beside the source |
+| `png jpg jpeg tga bmp hdr tex` | Texture | `<source stem>.tex` |
 | `ttf otf ttc` | Font | `<source stem>.fnt` |
 | `fbx` | Model | `<source stem>.mdl` (plus `.msh`, `.skl`, `.anm` beside it) |
 | `flac mp3 wav` | Sound | `<source stem>.snd` |
 
-Extensions are compared case-insensitively. Missing destination folders are created. Anything else is refused:
-`Studio: nothing bakes '<file>'`, exit `2`.
+Each result goes beside its source, or into the `--output` folder with the same name. Extensions are compared
+case-insensitively. Missing destination folders are created.
 
-A `.tex` source re-bakes a baked texture (to change its format, add mips, or turn it into an array). Name a
-destination for it: the default destination is the source itself, which is refused.
+A destination is named only in the second form, with exactly one source followed by a file that ends in the
+extension that source bakes into, and no `--output`. Any other second operand is one more source, so
+`Studio bake a.png b.png` bakes `a.tex` and `b.tex`.
+
+The files bake in parallel, and each bake still spreads its own work over the job pool. One file that fails does
+not stop the others. The run ends with `Studio: <n> baked, <m> failed`, and exits `1` if any failed.
+
+What `bake` refuses with exit `2`, before anything is baked:
+
+| Error | Cause |
+|---|---|
+| `Studio: 'bake' takes one or more sources or folders, and '--output' takes a folder` | No operand, or an empty `--output` |
+| `Studio: nothing to bake; no folder holds a source any baker reads` | Only folders were named, and none holds a source |
+| `Studio: nothing bakes '<file>'; run 'Studio help' for the sources each one reads` | A file whose extension no baker reads |
+| `Studio: two sources would both be baked into '<file>'` | Two sources that bake into one file, such as `a.png` and `a.jpg`, or two folders under one `--output` |
+
+A `.tex` source re-bakes a baked texture (to change its format, add mips, or turn it into an array). Name it as an
+operand of its own, since a folder skips it, and name a destination or an `--output` folder for it. The default
+destination is the source itself, which is refused.
 
 ### 4.2 `pack` and `build`
 
@@ -151,7 +178,8 @@ Studio pack <image|folder>... --output <tracker.json> [switches]
 Studio build <tracker.json> [--repack] [switches]
 ```
 
-See `trackers.md`.
+`build` takes exactly one tracker. Any other count fails with `Texture: 'build' takes one tracker`, exit `2`. See
+`trackers.md`.
 
 ### 4.3 `normal` and `relief`
 
@@ -161,7 +189,9 @@ Studio relief <source> [destination] [switches]
 ```
 
 The default destination is `<source stem>_normal.png` or `<source stem>_relief.png`. A destination ending in
-`.tex` writes a native texture instead. See `textures.md`.
+`.tex` writes a native texture instead. A destination with any other extension is refused with
+`Texture: '<destination>' is not a destination '<command>' writes`, and a missing source or a second destination with
+`Texture: '<command>' takes a source and, optionally, a destination`, both exit `2`. See `textures.md`.
 
 ### 4.4 `extract`
 
@@ -169,8 +199,8 @@ The default destination is `<source stem>_normal.png` or `<source stem>_relief.p
 Studio extract <texture> [destination]
 ```
 
-Writes each slice as a PNG. The default destination is `<stem>.png`. With more than one slice, each one gets
-`_0`, `_1`, ... appended to the destination's stem. See `textures.md`.
+Writes each slice as a PNG. The default destination is `<stem>.png`, and a destination must end in `.png`. With
+more than one slice, each one gets `_0`, `_1`, ... appended to the destination's stem. See `textures.md`.
 
 ### 4.5 `formats` and `version`
 
@@ -190,7 +220,9 @@ Studio 1.0.0
   sound   '.snd' revision 1
 ```
 
-`formats` prints every `ZyGraphic::TextureFormat` that `Texture::Exporter::IsSupported` accepts.
+`formats` prints every `ZyGraphic::TextureFormat` that `Texture::Exporter::IsSupported` accepts. `help`, `version`
+and `formats` print plain lines on standard output, without the log prefix or colour codes, so a script can read
+them as they are.
 
 ---
 
@@ -200,16 +232,16 @@ Studio 1.0.0
 
 ```json
 {
-    "sprite": { "layered": true, "linear": false, "mipmaps": true },
-    "normal": { "layered": true, "linear": true,  "mipmaps": true },
+    "sprite": { "layered": true, "linear": false, "mipmaps": true, "transparent": true },
+    "normal": { "layered": true, "linear": true,  "mipmaps": true, "normal": true },
     "relief": { "layered": true, "linear": true,  "mipmaps": true, "format": "R8UIntNorm" }
 }
 ```
 
 | Preset | Same as |
 |---|---|
-| `sprite` | `--layered --no-linear --mipmaps` |
-| `normal` | `--layered --linear --mipmaps` |
+| `sprite` | `--layered --no-linear --mipmaps --transparent` |
+| `normal` | `--layered --linear --mipmaps --normal` |
 | `relief` | `--layered --linear --mipmaps --format R8UIntNorm` |
 
 ### 5.1 Your own presets
@@ -234,11 +266,15 @@ Studio bake Art/Button.png Content/UI/Button.tex --presets Studio.json --preset 
 How a preset is applied:
 
 - Each key becomes `--key=value`. A JSON boolean becomes `true` or `false`, a number is printed, a string is copied.
-  Any switch name works, not only texture ones.
+  Any switch name works, not only texture ones. A key that is no switch at all is refused like a misspelt
+  typed one (`Studio: '--mipmap' is not a switch`, exit `2`).
+- A command passes over a preset's switch it does not read, so one preset can serve several commands. A value it
+  does read is checked like a typed one.
 - The preset's switches are placed before the typed ones, and the last occurrence wins, so **a switch typed on the
   command line always beats the same switch in the preset**.
 - An unknown preset name fails with `Studio: '<name>' is not a preset; the built-in ones are sprite, normal and
-  relief`, exit `2`. So does a `--presets` file that cannot be read.
+  relief`, exit `2`. So does a `--presets` file that cannot be read, and a `--preset` with no name
+  (`Studio: '--preset' takes a name; the built-in ones are sprite, normal and relief`).
 - `--presets` alone, without `--preset`, does nothing.
 
 ---
@@ -256,33 +292,44 @@ From `Application/Source/Outcome.hpp`:
 A script can tell a broken asset (`1`) from a broken invocation (`2`). Every error is logged first, prefixed with
 its domain: `Texture:`, `Font:`, `Model:`, `Sound:`, `Studio:`.
 
-Switch values that are checked and refused with exit `2`:
+Switches that are checked and refused with exit `2`, before anything is baked:
 
 | Switch | Check |
 |---|---|
+| Any typed switch | Must be one Studio reads, else `Studio: '--<name>' is not a switch; run 'Studio help' for the list` |
+| Any typed switch | Must be one the command reads, else `Studio: '<command>' does not read '--<name>'`. A preset's switches are exempt |
+| A switch that takes a value | Has no `--no-` spelling, else `Studio: '--<name>' takes a value, so it has no '--no-' spelling` |
+| Every toggle | A value after `=` must be `true`, `false`, `1` or `0` |
+| Every number switch | Must be a number with nothing after it |
 | `--format` | Must name a `TextureFormat` |
+| `--mode`, `--fit`, `--filter`, `--shape`, `--channel`, `--encoding`, `--interpolation` | Must name one of the switch's choices |
+| `--cube`, `--array`, `--extent` | Must be `<width>x<height>`, each side a whole number from 1 to 65535 |
 | `--fill` | Must be `RRGGBB` or `RRGGBBAA` hexadecimal, an optional leading `#` allowed |
-| `--encoding` | Must be `Linear`, `Adaptive` or `Opus` |
-| `--interpolation` | Must be `Step`, `Linear`, `Cubic` or `Hermite` |
 | `--attributes` | Must parse and name `Position` |
 | `--lod` | Must be `0` to `3`, else `Model: '--lod' goes from 0 to 3, which <n> is not` |
 | `--charset`, `--fallback` charsets | Every entry must be a preset, a codepoint or a range |
-| `--mode`, `--fit`, `--filter`, `--shape`, `--channel` | Must name one of the switch's choices, else `Studio: '<x>' is not a choice '--<name>' takes` |
+| `--preset` | Must name a preset (see 5) |
+
+A value that fails a toggle, number, choice or extent check is refused with `Studio: '<value>' is not a value
+'--<name>' takes`. The check covers a preset's values too.
 
 ---
 
 ## 7. Logging
 
-Studio logs through the engine's `LOG_I`, `LOG_W` and `LOG_E`. A successful bake prints one line per file written:
+Studio logs through the engine's `LOG_I`, `LOG_W` and `LOG_E`. A successful bake prints one line per file written,
+and `bake` ends with a count of the sources:
 
 ```
 Texture: 'Art/hero.png' -> 'Content/hero.tex' (65612 bytes)
 Model: 4182 vertices from 12546 corners, 4182 triangles, 2 materials, 7 attributes in 1 streams
 Model:     level 0 keeps 4182 triangles (100%) above 3% coverage, and casts 4182
 Model: 'Art/Knight.fbx' -> 'Content/Knight.msh' (301224 bytes)
+Studio: 2 baked, 0 failed
 ```
 
-(The numbers above are illustrative.)
+(The numbers above are illustrative.) The files of one `bake` run in parallel, so the lines of two sources can
+interleave. Only `help`, `version` and `formats` bypass the logger and print plain lines.
 
 ---
 
@@ -380,17 +427,25 @@ if (!Studio::Model::Profile::From(Parsed, Model))
 Note the differences: `Model::Profile::From` returns `Bool` and writes through an output parameter, while the others
 return the profile. `Font::Profile::From` leaves `Charset` empty when `--charset` cannot be read.
 
+The engine's parser on its own still lets a bare toggle take the next word, and checks no value. The checks of
+section 6 and the toggle spelling of 3.1 live in the application's `Usage` class, not in the libraries. A host that
+takes Studio's switches from its own command line should spell toggles with `=` or `--no-`.
+
 ---
 
 ## 9. Common mistakes
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `Studio: 'bake' takes a source and, optionally, a destination` although a source was typed | A switch before the source swallowed it | Put operands first |
+| `Studio: 'hero.png' is not a value '--format' takes` | A switch that takes a value read the source as its value | Give the switch its value, or write `--name=value` |
+| `Studio: nothing bakes 'false'` | `--mipmaps false`, and a toggle takes no word | `--no-mipmaps` or `--mipmaps=false` |
+| A second file appears, or `Texture: failed to read '<destination>'` | The destination's extension is not the one the source bakes into, so it was read as another source | Name it `.tex`, `.fnt`, `.mdl` or `.snd`, or use `--output <folder>` |
+| `Studio: '--mipmap' is not a switch` | A misspelt switch | Check `Studio help` |
+| `Studio: 'build' does not read '--cube'` | A switch the command has no use for | Drop it |
 | Exit `2` with the usage printed | No command given | Name a command |
 | `Texture: '<file>' is both the source and the destination` | Re-baking a `.tex` without a destination | Name a destination |
 | A preset seems ignored for one switch | The same switch was typed too, and typed switches win | Drop the typed one |
-| `Studio: 'Arry' is not a choice '--mode' takes` | A misspelt enumerated switch | Check the spelling |
+| `Studio: 'Arry' is not a value '--mode' takes` | A misspelt enumerated switch | Check the spelling |
 | `Model: '--lod' goes from 0 to 3, which 5 is not` | `--lod` is limited to `0`..`3` | Use `0` to `3` |
 
 ---
@@ -402,9 +457,9 @@ return the profile. `Font::Profile::From` leaves `Charset` empty when `--charset
 | `CMakeLists.txt` | Project, output folders, `STUDIO_BUILD_APPLICATION`, the engine fetch |
 | `Library/CMakeLists.txt` | Adds the `Font`, `Material`, `Model`, `Sound`, `Texture` libraries |
 | `Library/<Domain>/CMakeLists.txt` | Each library's dependencies |
-| `Application/Source/Main.cpp` | Preset expansion, the job host, `main` |
+| `Application/Source/Main.cpp` | Toggle spelling, preset expansion, the job host, `main` |
 | `Application/Source/Console.hpp`, `Console.cpp` | The command table and every handler |
-| `Application/Source/Usage.cpp` | The help text |
+| `Application/Source/Usage.hpp`, `Usage.cpp` | The switch table, the switch and value checks, the help text |
 | `Application/Source/Preset.hpp`, `Preset.cpp` | Built-in presets and `--presets` loading |
 | `Application/Source/Outcome.hpp` | Exit codes |
 | `Application/Source/Path.hpp` | Stem, extension and derived-destination helpers |

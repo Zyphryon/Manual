@@ -39,8 +39,8 @@ Payloads are written with `Writer::WriteBlockCompressed<UInt32>`:
 
 When LZ4 would not shrink the payload, the raw bytes are stored and `Length` equals `Size`. A "not compressed" bake
 (`--no-compressed`) writes the same layout with the raw payload, so a reader handles both the same way: if
-`Length == Size`, copy; otherwise LZ4-decode into `Size` bytes. LZ4 levels used: textures 9, sounds 6, mesh buffers
-and font pages 3.
+`Length == Size`, copy; otherwise LZ4-decode into `Size` bytes. LZ4 levels used: textures and font pages 9, sounds
+6, mesh buffers 3.
 
 ### 1.2 Chunk
 
@@ -118,7 +118,7 @@ A `.tex` is also the body of every font atlas chunk (section 3).
 | Chunk | Body |
 |---|---|
 | `KERN` | `ZyRender::Font::Kerning` (`Table<UInt64, Real64>`) through `Archive`: key `(first << 32) \| second`, value in em units. Left out when there are no pairs |
-| `ATLS` | A complete `.tex` file: `ZTEX`, revision 1, `Texture2D`, `RGBA8UIntNorm`, side, side, 1 layer, 1 level, LZ4 level 3 payload |
+| `ATLS` | A complete `.tex` file: `ZTEX`, revision 1, `Texture2D`, `RGBA8UIntNorm`, side, side, 1 layer, 1 level, LZ4 level 9 payload |
 
 Pages are square. The `Page` of a glyph indexes the `ATLS` chunks in order. A font with no `ATLS` chunk is refused:
 `'<file>' is missing its atlas chunk`.
@@ -166,7 +166,7 @@ The step index carries over between blocks. The last block is zero-padded past `
 
 | Field | Type | Meaning |
 |---|---|---|
-| Pre-skip | `UInt16` | Frames to discard at the start (the encoder's lookahead) |
+| Pre-skip | `UInt16` | Frames to discard at the start (the encoder's lookahead, plus the tail a `--loop` sound is primed with, which makes `959` in all) |
 | Packet frames | `UInt16` | `960` |
 | Packets | `UInt32` | Packet count |
 | Lengths | `UInt16[Packets]` | Each packet's byte length |
@@ -201,7 +201,9 @@ Packets are Opus at 48 kHz with `Stride` channels.
 | per primitive | `Mesh::Primitive`, written raw | Draw range (index count, base vertex 0, first index, 1 instance), material slot, level, caster flag |
 
 Primitives are grouped by level, level 0 first. Within a level, its own runs (one per material) come first, then
-its shadow caster runs (`Caster` set). The loader refuses a primitive naming a level past `Levels`.
+its shadow caster runs (`Caster` set). A caster run indexes the same vertices as the rest, and may name fewer of
+them than the run it stands for, where corners a shadow cannot tell apart were welded. The loader refuses a
+primitive naming a level past `Levels`.
 
 ### 5.2 `VBUF` chunk
 
@@ -339,10 +341,11 @@ JSON, four-space indented, `"Version": 1`. Full description in `trackers.md` sec
     "Mipmaps": false,
     "Linear": false,
     "Compress": true,
+    "Mode": "Array",
     "Headroom": 4,
     "Regions": [
-        { "Name": "sword",  "Source": "../Art/Icons/sword.png",  "From": [0, 0, 64, 64], "Slice": 0, "Rect": [0, 0, 64, 64], "Crop": [0, 0, 1, 1] },
-        { "Name": "shield", "Source": "../Art/Icons/shield.png", "From": [0, 0, 64, 64], "Slice": 1, "Rect": [0, 0, 64, 64], "Crop": [0, 0, 1, 1] }
+        { "Name": "sword",  "Source": "../Art/Icons/sword.png",  "Slice": 0, "Rect": [0, 0, 64, 64], "Crop": [0, 0, 1, 1] },
+        { "Name": "shield", "Source": "../Art/Icons/shield.png", "Slice": 1, "Rect": [0, 0, 64, 64], "Crop": [0, 0, 1, 1] }
     ]
 }
 ```

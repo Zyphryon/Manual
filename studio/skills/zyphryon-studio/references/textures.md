@@ -12,10 +12,13 @@ own chapter, `trackers.md`.
 source image ──decode──► one or more bitmaps ──cut (cube/array)──► mip chain ──convert──► block-encode ──► LZ4 ──► .tex
 ```
 
-1. **Decode.** stb_image reads the source at its own depth (8-bit, 16-bit or float) and channel count.
+1. **Decode.** stb_image reads the source at its own depth (8-bit, 16-bit or float) and channel count. 16-bit
+   colour art is read at 8 bits (see 2.1).
 2. **Cut.** With `--cube` or `--array`, the one image becomes six faces or a run of slices.
-3. **Mip.** With `--mipmaps`, every slice gets a full chain down to 1x1, filtered at the source's depth.
-4. **Convert.** Each level is transcoded into the target format (or the plain format a block format is packed from).
+3. **Mip.** With `--mipmaps`, every slice gets a full chain down to 1x1, each level filtered in linear floating
+   point from the one above.
+4. **Convert.** Each level is converted once into the target format (or the plain format a block format is packed
+   from).
 5. **Encode.** A block format (BC1 to BC5, BC7) is packed four by four texels.
 6. **Write.** The header, then every slice with its whole chain, LZ4-compressed when that is smaller.
 
@@ -27,30 +30,34 @@ The output is the `ZTEX` file `ZyGraphic::TEXLoader` reads (layout in `formats.m
 
 | Extension | Decoder | Notes |
 |---|---|---|
-| `png` | stb_image | 8 or 16 bits per channel |
+| `png` | stb_image | 8 or 16 bits per channel. 16-bit colour art is read at 8 bits |
 | `jpg`, `jpeg` | stb_image | 8 bits |
 | `tga` | stb_image | 8 bits |
 | `bmp` | stb_image | 8 bits |
-| `hdr` | stb_image | Radiance HDR, read as 32-bit float |
+| `hdr` | stb_image | Radiance HDR, read as 32-bit float and kept as `RGBA16Float` when no `--format` is given |
 | `tex` | Studio's own reader | A baked texture, see 2.3 |
 
 ### 2.1 What format a source decodes into
 
 When `--format` is left out, the texture is written in the format the source decoded into:
 
-| Source channels | 8-bit, `--linear` | 8-bit, `--no-linear` | 16-bit | HDR (float) |
+| Source channels | 8-bit, `--linear` | 8-bit or 16-bit, `--no-linear` | 16-bit, `--linear` | HDR (float) |
 |---|---|---|---|---|
-| 1 (grey) | `R8UIntNorm` | `RGBA8UIntNorm_sRGB` (expanded) | `R16UIntNorm` | `R32Float` |
-| 2 (grey + alpha) | `RG8UIntNorm` | `RGBA8UIntNorm_sRGB` (expanded) | `RG16UIntNorm` | `RG32Float` |
-| 3 (RGB) | `RGBA8UIntNorm` (alpha added, opaque) | `RGBA8UIntNorm_sRGB` | `RGBA16UIntNorm` | `RGBA32Float` |
-| 4 (RGBA) | `RGBA8UIntNorm` | `RGBA8UIntNorm_sRGB` | `RGBA16UIntNorm` | `RGBA32Float` |
+| 1 (grey) | `R8UIntNorm` | `RGBA8UIntNorm_sRGB` (expanded) | `R16UIntNorm` | `RGBA16Float` |
+| 2 (grey + alpha) | `RG8UIntNorm` | `RGBA8UIntNorm_sRGB` (expanded) | `RG16UIntNorm` | `RGBA16Float` |
+| 3 (RGB) | `RGBA8UIntNorm` (alpha added, opaque) | `RGBA8UIntNorm_sRGB` | `RGBA16UIntNorm` | `RGBA16Float` |
+| 4 (RGBA) | `RGBA8UIntNorm` | `RGBA8UIntNorm_sRGB` | `RGBA16UIntNorm` | `RGBA16Float` |
 
-Two rules come from the engine's formats:
+Three rules come from the engine's formats:
 
 - **There is no three-channel format.** An RGB source always gains an opaque alpha.
-- **sRGB exists only as 8-bit RGBA.** `--no-linear` on a 16-bit or float source logs a warning
-  (`sRGB was requested but the source is 16-bit ...`) and keeps it linear. `--no-linear` on a one- or two-channel
-  8-bit source expands it to RGBA (with a warning).
+- **sRGB exists only as 8-bit RGBA.** A source is read as sRGB colour when `--no-linear` is given or `--format`
+  names a `_sRGB` format. A 16-bit source is then read at 8 bits, and a one- or two-channel source is expanded to
+  RGBA (with a warning). A float source stays linear, with the warning `sRGB was requested but the source is
+  floating-point, which is always read as linear`.
+- **Grey fills every channel a format writes.** A one- or two-channel source baked into a `--format` of three or
+  four channels (an RGBA format, or BC1, BC2, BC3 or BC7) is read as grey RGB plus its alpha, opaque when it has
+  none.
 
 ### 2.2 Size limits
 
@@ -76,6 +83,7 @@ Studio bake Content/Rock.tex Content/Rock_BC7.tex --format BC7UIntNorm --mipmaps
 - The layout (2D, array, cube) carries over. A source with several slices cannot be cut again with `--cube` or
   `--array`.
 - Name a destination. The default (`<stem>.tex` beside the source) is the source itself, which is refused.
+- Name the `.tex` itself. A folder given to `bake` skips `.tex` files, since they are what a bake writes.
 
 ---
 
@@ -90,13 +98,18 @@ These apply to `bake`, `pack` and `build`, and to `normal` and `relief` when the
 | `--compressed` | `Compress` | on | LZ4-compress the payload when that comes out smaller |
 | `--linear` | `Linear` | **on** | Read the source as linear values. `--no-linear` reads it as sRGB colour art |
 | `--layered` | `Layered` | off | Write a lone 2D image as a one-slice `Texture2DArray` |
+| `--transparent` | `Opacity` | off | Alpha is opacity. Mips weigh colour by alpha, and an atlas fills clear texels with the nearest visible colour (3.4) |
+| `--cutoff <alpha>` | `Cutoff` | `0` (off) | The alpha an alpha test cuts at. Every mip level keeps the share of texels that pass it (3.4) |
+| `--normal` | `Normal` | off | The texels are tangent-space normals, renormalised in every mip level (3.4) |
 | `--cube <c>x<r>` | `Cube` | none | `bake` only: cut the source into six cube faces, a grid counted in faces |
 | `--array <w>x<h>` | `Slice` | none | `bake` only: cut the source into array slices of that size in texels |
 
-Toggles take `--no-` to turn off: `--no-mipmaps`, `--no-compressed`, `--no-linear`, `--no-layered`.
+Toggles take `--no-` to turn off: `--no-mipmaps`, `--no-compressed`, `--no-linear`, `--no-layered`,
+`--no-transparent`, `--no-normal`. A toggle never takes the next word, so `--mipmaps false` is not `--no-mipmaps`.
+Write `--mipmaps=false` to give a toggle its value.
 
 An extent is `<width>x<height>` (an upper-case `X` works too). Each side must be 1 to 65535. A malformed extent is
-logged and ignored, as if the switch were absent.
+refused with `Studio: '<value>' is not a value '--<name>' takes`, exit `2`.
 
 ### 3.1 The two defaults to remember
 
@@ -110,31 +123,48 @@ for anything drawn in a 3D world. Leave them off for UI images drawn at their ow
 
 ### 3.2 How `--linear` and `--format` interact
 
-`--linear` decides how the **source** is read. `--format` decides how the **output** is stored. Studio converts
-between the two:
+`--linear` decides how the **source** is read, unless `--format` names a `_sRGB` format, which always reads it as
+sRGB colour. `--format` decides how the **output** is stored. Studio converts between the two:
 
 | `--linear` | `--format` | Result |
 |---|---|---|
 | on | none | Values stored as they are, in a linear format |
 | off | none | Values stored as they are, in `RGBA8UIntNorm_sRGB` |
 | off | any `_sRGB` format | Values stored as they are (decoded to linear, then re-encoded) |
-| on | any `_sRGB` format | **The values are encoded through the sRGB curve.** A colour image comes out brighter |
+| on | any `_sRGB` format | Values stored as they are. The format reads the source as sRGB colour, as `--no-linear` would |
 | off | a linear format | **The values are decoded from sRGB.** A colour image comes out darker and bands in the shadows |
 
-For colour art, use `--no-linear` with either no format or a `_sRGB` one. For data, use `--linear` with a linear
-format.
+For colour art, use `--no-linear` or a `_sRGB` format, or both. For data, use `--linear` with a linear format.
 
 ### 3.3 Mip filtering
 
-Each level is a box average of the level above it, every target texel averaging the source texels it covers. For
-an sRGB format the average is taken in linear light (each texel is decoded through the sRGB curve, averaged and
-re-encoded), so mips of colour art do not darken. Filtering runs at the source's own depth, and the conversion to
-the target format happens after the whole chain is built.
+Each level is a box average of the level above it. Every target texel averages the source texels it covers, each
+weighed by the share of it the target texel covers, so a side that is not a power of two filters without drifting.
+The chain is filtered in linear floating point, each level from the unrounded level above, and each level is
+rounded to the target format once. For an sRGB format the average is taken in linear light (each texel is decoded
+through the sRGB curve, averaged and re-encoded), so mips of colour art do not darken.
 
 The level count is `max(1, bit width of the longer side)`, which is a chain down to 1x1 for any size, power of two
 or not.
 
-### 3.4 LZ4 compression
+### 3.4 Alpha, coverage and normals in the mips
+
+Three switches tell the mip filter what the texels hold. Each is off by default. Apart from the atlas fill under
+`--transparent`, they change only the levels below the base, so they do nothing without `--mipmaps`.
+
+- **`--transparent`** says alpha is opacity. Each texel's colour is weighed by its alpha, so the colour that fully
+  clear texels hide does not bleed into the visible ones beside them. On an atlas, every fully clear texel inside a
+  region's cell (its extrusion and padding included) also takes the colour of the nearest visible texel, alpha
+  left at 0, so filtering shows no dark fringe. The `sprite` preset turns it on.
+- **`--cutoff <alpha>`** is for alpha-tested art such as foliage and fences. Give it the value the shader cuts at,
+  for example `0.5`. Each level's alphas are scaled so the share of texels that pass the test stays as near the
+  base level's as the level's alphas allow, so the art does not thin out with distance. `0` turns it off.
+- **`--normal`** says the texels are tangent-space normals, encoded as `n * 0.5 + 0.5`. Each averaged normal comes
+  out shorter than a unit one, and is lengthened back. X, Y and Z are read from the first three channels. A
+  two-channel format (`RG8UIntNorm`, `BC5UIntNorm`) holds X and Y alone, and Z is rebuilt for the filter the way a
+  shader would. The `normal` preset turns it on.
+
+### 3.5 LZ4 compression
 
 `--compressed` (on) packs the payload with LZ4 at level 9. When that is not smaller, the payload is stored raw. It
 is a file-size and load-time saving only. The engine expands it on load, and the GPU sees the same bytes either way.
@@ -152,7 +182,7 @@ Turn it off only to inspect a payload by hand.
 
   | Format | Packed from | Encoder |
   |---|---|---|
-  | `BC1UIntNorm`, `BC1UIntNorm_sRGB` | `RGBA8UIntNorm` / `_sRGB` | rgbcx BC1, highest quality level |
+  | `BC1UIntNorm`, `BC1UIntNorm_sRGB` | `RGBA8UIntNorm` / `_sRGB` | rgbcx BC1, highest quality level, three-colour blocks allowed |
   | `BC2UIntNorm`, `BC2UIntNorm_sRGB` | `RGBA8UIntNorm` / `_sRGB` | 4-bit explicit alpha plus rgbcx BC1 colour |
   | `BC3UIntNorm`, `BC3UIntNorm_sRGB` | `RGBA8UIntNorm` / `_sRGB` | rgbcx BC3 high quality |
   | `BC4UIntNorm` | `R8UIntNorm` | rgbcx BC4 high quality |
@@ -171,7 +201,8 @@ formats. Run `Studio formats` for the exact list your build prints.
 ### 4.2 Block format rules
 
 - **Both sides must be multiples of four**: `'BC7UIntNorm' needs sides that are multiples of four, which 250x250 are
-  not`. Resize the source, or let `pack` pick a size (`--pot` on by default rounds slices to powers of two).
+  not`. Resize the source, or let `pack` pick a size (an atlas's sides are always multiples of four, with or
+  without `--pot`).
 - Mip levels smaller than a block are padded by repeating their last texel, so a full chain down to 1x1 works.
 - The channel count is the encoder's: BC4 keeps red only, BC5 red and green only. A three-channel normal map
   written as `BC5UIntNorm` keeps X and Y, and the shader must rebuild Z.
@@ -183,9 +214,10 @@ formats. Run `Studio formats` for the exact list your build prints.
 |---|---|
 | Colour art for a 3D surface | `--no-linear --mipmaps --format BC7UIntNorm_sRGB` (or `BC1UIntNorm_sRGB` with no alpha) |
 | UI image drawn at its own size | `--no-linear` |
-| Tangent-space normal map | `--linear --mipmaps` (`RGBA8UIntNorm`), or `--format BC5UIntNorm` if the shader rebuilds Z |
+| Alpha-tested foliage or fences | `--no-linear --mipmaps --cutoff 0.5` (the shader's cut value), plus `--transparent` |
+| Tangent-space normal map | `--linear --mipmaps --normal` (`RGBA8UIntNorm`), or add `--format BC5UIntNorm` if the shader rebuilds Z |
 | One greyscale map (height, mask, roughness) | `--linear --mipmaps --format R8UIntNorm` or `BC4UIntNorm` |
-| HDR environment | `.hdr` source, `--format RGBA16Float` |
+| HDR environment | `.hdr` source, which is stored as `RGBA16Float` with no `--format` |
 
 Whether a shader samples a 2D texture or an array is up to the shader. When it samples an array, write even a
 single image with `--layered`.
@@ -273,8 +305,8 @@ Reads one image as a height field and draws a tangent-space normal map from its 
 | `--wrap` | off | Wrap around the edges, for tiling textures |
 | `--masked` | **on** | Transparent pixels (alpha below one half) are ground level, and their normal points straight out |
 
-A misspelt `--channel` or `--filter` (and `--shape` on `relief`) is refused with `Studio: '<x>' is not a choice
-'--<name>' takes`, exit `2`.
+A misspelt `--channel` or `--filter` (and `--shape` on `relief`) is refused with `Studio: '<x>' is not a value
+'--<name>' takes`, exit `2`. So is a number switch given something that is not a number.
 
 The filters, from sharpest to softest:
 
@@ -296,6 +328,7 @@ nothing; add `--wrap` so the edges match.
 | none | `<source stem>_normal.png` beside the source |
 | `*.png` | An 8-bit RGBA PNG, values stored as they are (no sRGB curve) |
 | `*.tex` | A native texture. The format defaults to `RGBA8UIntNorm` when `--format` is left out; every texture switch applies |
+| anything else | Refused with `'<destination>' is not a destination 'normal' writes`, exit `2` |
 
 A source with several slices (a `.tex` array) can only go to a `.tex` destination, which keeps every slice:
 `'<file>' holds 4 slices, which only a '.tex' destination keeps`.
@@ -339,12 +372,18 @@ pixels sink to the bottom (0).
 
 For each pixel, in this order (the order an image editor applies them):
 
+0. Read: the height `h`, with `--invert` and `--blur` applied. With `--masked`, a transparent pixel reads as 0
+   before the blur, so the colour it hides does not blur into the art's edge.
 1. Levels: `v = clamp((h - low) / (high - low), 0, 1)`.
 2. Tone: `v = clamp((v + brightness - 0.5) * contrast + 0.5, 0, 1)`.
 3. Gamma: `v = v ^ gamma`.
 4. Bevel (when `--bevel` > 0): `v = rise(d / bevel) * (1 - detail + detail * v)`, where `d` is the distance to the
    outline in pixels.
 5. Mask: a transparent pixel becomes 0.
+
+The distance `d` is exact and round, measured from the pixel's centre to the edge of the nearest transparent pixel
+(alpha below one half), so a pixel beside the outline sits at 0.5. Without `--wrap`, the image's border counts as
+outline. With `--wrap`, the distance runs across the seam of the tile.
 
 The bevel shapes:
 
@@ -400,6 +439,9 @@ struct Profile final
 
     ZyGraphic::TextureFormat Format   = ZyGraphic::TextureFormat::Unspecified;
     Bool                     Mipmaps  = false;
+    Bool                     Opacity  = false;
+    Real32                   Cutoff   = 0.0f;
+    Bool                     Normal   = false;
     Bool                     Linear   = true;
     Bool                     Compress = true;
     Bool                     Layered  = false;
@@ -411,8 +453,9 @@ struct Profile final
 };
 ```
 
-`Profile::From` reads an unknown `--format` as `Unspecified`. The command line checks that case itself and refuses
-it. A host reading formats from its own UI should do the same.
+`Profile::From` reads an unknown `--format` as `Unspecified`, and `Extent::From` logs a malformed extent and leaves
+it unset. The command line checks both cases itself and refuses them. A host reading formats from its own UI should
+do the same.
 
 ### 11.2 `Texture::Baker`
 
@@ -435,12 +478,12 @@ Bool    Bake(Text Source, Text Destination, ConstRef<Profile> Profile) const;
 |---|---|
 | `Importer::Import(ConstSpan<Byte>, Text Type, ConstRef<Profile>)` | Decode bytes into a `Surface` |
 | `Exporter::Export(Scheduler, Slices, Layout, Profile)` | Write bitmaps as `.tex` bytes |
-| `Exporter::Prepare(Scheduler, Bitmap, UInt8 Levels, TextureFormat)` | Mip, convert and block-encode one slice for a live upload, without the file wrapper |
+| `Exporter::Prepare(Scheduler, Bitmap, UInt8 Levels, TextureFormat)` | Mip, convert and block-encode one slice for a live upload, without the file wrapper, with a default profile's mip filter |
 | `Exporter::IsSupported(TextureFormat)` | Whether a format can be written |
 | `Encoder::IsSupported`, `Encoder::GetSource` | Whether a block format has an encoder, and the plain format it packs from |
 | `Slicer::Describe(Columns, Rows)`, `Slicer::Divide(Bitmap, W, H)`, `Slicer::Slice(Bitmap, Layout)` | Cube and grid cutting |
-| `Resampler::Resize`, `Resampler::Mipmap` | Box resize and mip chains |
-| `Transcoder::Transcode(Bitmap, Format)` | Convert between plain formats, colour space included |
+| `Resampler::Resize(Canvas, W, H)`, `Resampler::Mipmap(Scheduler, Bitmap, Levels, Format, Profile)` | Area-weighted resize of a canvas, and a mip chain written in a format, filtered as the profile says |
+| `Transcoder::Transcode(Bitmap, Format)`, `Transcoder::Convert(Source, From, Target, To, Texels)` | Convert between plain formats, colour space included, a bitmap or a run of texels |
 | `Canvas` | One level as linear `RGBA32Float`, for drawing; `Canvas::From(Bitmap)`, `Canvas::To(Format)` |
 | `Normal::Generate(Canvas, Settings)`, `Relief::Generate(Canvas, Settings)` | The generators behind `normal` and `relief` |
 | `Picture::Encode(Canvas, Bool sRGB)`, `Picture::Write(Path, Canvas, Bool sRGB)` | Write a canvas as an 8-bit RGBA PNG |
@@ -466,9 +509,13 @@ Studio::Texture::Picture::Write("Review/Brick_Normal.png", Map, false);
 | Symptom | Cause | Fix |
 |---|---|---|
 | Colour art looks washed out or wrong under light | Baked with the default `--linear` | `--no-linear` or `--preset sprite` |
-| Colour art comes out brighter | `--format ..._sRGB` with `--linear` on | Add `--no-linear` |
 | Colour art comes out darker, banded | `--no-linear` with a linear `--format` | Use a `_sRGB` format |
+| A mask or normal map reads wrong in the shader | Data baked into a `_sRGB` format, which reads it as colour | Use a linear format |
 | Texture shimmers in the distance | No mips (the default) | `--mipmaps` |
+| `Studio: nothing bakes 'false'` after `--mipmaps false` | A toggle takes no word, so `false` became an operand | `--no-mipmaps` or `--mipmaps=false` |
+| Dark fringe around cut-out art in the distance | Clear texels' hidden colour filtered into the mips | `--transparent` (or `--preset sprite`) |
+| Foliage or a fence thins out with distance | Alpha-tested mips lose coverage | `--cutoff` at the shader's cut value |
+| A normal map looks flat or dull in the distance | Averaged normals come out shorter than unit length | `--normal` (or `--preset normal`) |
 | `needs sides that are multiples of four` | A BC format on an odd-sized image | Resize, or pick a plain format |
 | `is not a format this exporter can write` | ETC2, EAC, BC6, a raw integer or packed format | Pick from `Studio formats` |
 | `stores no plain interleaved texels` | Re-baking or extracting a BC `.tex` | Keep and bake from the source image |
@@ -488,9 +535,9 @@ Studio::Texture::Picture::Write("Review/Brick_Normal.png", Map, false);
 | `Library/Texture/Source/Texture/Export/Exporter.cpp` | Supported formats, mips, payload, header |
 | `Library/Texture/Source/Texture/Export/Picture.cpp` | PNG writing |
 | `Library/Texture/Source/Texture/Process/Encoder.cpp` | BC1 to BC5 and BC7 encoding |
-| `Library/Texture/Source/Texture/Process/Resampler.cpp` | Box resize and mip filtering |
+| `Library/Texture/Source/Texture/Process/Resampler.cpp` | Area-weighted resize and mip filtering, with the alpha, coverage and normal rules |
 | `Library/Texture/Source/Texture/Process/Transcoder.cpp` | Format and colour-space conversion |
 | `Library/Texture/Source/Texture/Process/Slicer.cpp` | Cube arrangements and grid cutting |
-| `Library/Texture/Source/Texture/Generate/Field.cpp` | Height reading, blur |
+| `Library/Texture/Source/Texture/Generate/Field.cpp` | Height reading, masking, blur |
 | `Library/Texture/Source/Texture/Generate/Normal.cpp`, `Relief.cpp` | The two generators |
 | `Application/Source/Console.cpp` | `Generate`, `Normal`, `Relief`, `Extract`, `Formats` handlers |

@@ -50,6 +50,8 @@ Each operand is an image file or a folder.
 - Multi-slice source (a `.tex` array or cube): one region per slice, `<stem>_000`, `<stem>_001`, ... in slice order.
 - Two regions may not share a name, compared case-insensitively: `'A/hero.png' and 'B/hero.png' would both be named
   'hero'`, exit `1`. Rename one, or pack them into separate trackers.
+- A hand-edited tracker whose names differ only by case still loads, with the warning `regions <i> and <j> of
+  '<tracker>' are both named '<name>'`. A game finds only one of them.
 
 ### 2.3 Paths
 
@@ -64,8 +66,8 @@ Each operand is an image file or a folder.
 
 ### 2.4 Switches
 
-The texture switches of `textures.md` apply (`--format`, `--mipmaps`, `--linear`, `--layered`, `--compressed`).
-`--cube` and `--array` do not. The pack switches:
+The texture switches of `textures.md` apply (`--format`, `--mipmaps`, `--linear`, `--layered`, `--compressed`,
+`--transparent`, `--cutoff`, `--normal`). `--cube` and `--array` do not. The pack switches:
 
 | Switch | Default | Meaning |
 |---|---|---|
@@ -80,16 +82,16 @@ The texture switches of `textures.md` apply (`--format`, `--mipmaps`, `--linear`
 | `--fit <f>` | `Stretch` | Array: `Stretch`, `Center` or `Contain` each region into its slice |
 | `--headroom <n>` | `1` | Array: round the slice count up to a multiple of n |
 | `--fill <RRGGBBAA>` | `00000000` | Colour of every pixel no region covers, as the texture stores it |
-| `--pot` | on | Atlas: round each side of the slice up to a power of two |
+| `--pot` | on | Atlas: round each side of the slice up to a power of two. A `--width` or `--height` that is not one is lowered to the power of two below |
 | `--square` | off | Atlas: keep the slice square |
 | `--pages` | off | Atlas: spill what does not fit onto further slices |
 
-A misspelt `--mode` or `--fit` is refused with `Studio: '<x>' is not a choice '--<name>' takes`, exit `2`.
-`--square` with a `--width` other than `--height` is refused with `Texture: '--square' needs '--width' and
-'--height' to match, not <w> and <h>`, exit `1`.
+A misspelt `--mode` or `--fit` is refused with `Studio: '<x>' is not a value '--<name>' takes`, exit `2`, and so is
+a number switch given something that is not a number. `--square` with a `--width` other than `--height` is refused
+with `Texture: '--square' needs '--width' and '--height' to match, not <w> and <h>`, exit `1`.
 
-The tracker records the `--mipmaps`, `--linear` and `--compressed` settings the texture was baked with, so `build`
-writes it the same way.
+The tracker records the `--mipmaps`, `--linear`, `--compressed`, `--transparent`, `--cutoff` and `--normal` settings
+the texture was baked with, and the mode and fit it was packed with, so `build` writes it the same way.
 
 ---
 
@@ -103,17 +105,25 @@ Studio pack Sprites/ --output Atlas/Sprites.json --padding 2 --extrude 1 --no-li
 
 1. Every source is measured. A region's size is its source's size, or its `From` crop when one is set.
 2. Regions are ordered largest area first, ties in authored order, so the same input always packs the same way.
-3. Each region takes `width + 2 * extrude + padding` by `height + 2 * extrude + padding` of space.
-4. The search starts from the smallest power-of-two bin that holds the largest region and whose area could hold all
-   of them, capped by `--width` and `--height`. The bin grows (the shorter side doubles) until every region fits.
+3. Each region takes a cell of `width + 2 * extrude + padding` by `height + 2 * extrude + padding`, each side
+   rounded up to a multiple of 4. The region sits `extrude` pixels in from the cell's top-left corner.
+4. The search starts from the smallest power-of-two bin that holds the largest cell and whose area could hold all
+   of them, capped by `--width` and `--height`. With `--pot`, a cap that is not a power of two is first lowered to
+   the power of two below. The bin grows (the shorter side doubles) until every region fits.
 5. Placement is MaxRects with the best-short-side-fit rule: each region takes the free rectangle that leaves the
    thinnest sliver along its tighter side.
 6. When one slice at `--width` by `--height` still cannot hold every region:
    - with `--pages`, regions spill onto further slices of the full size, and the texture becomes a
      `Texture2DArray`;
    - without it, the pack fails: `'<name>' (WxH) does not fit a 2048x2048 slice, and '--pages' is off`.
-7. A single slice shrinks to what its regions use (border included), then rounds up to powers of two with `--pot`
-   and to a square with `--square`. Every slice of a multi-page atlas is the full `--width` by `--height`.
+7. A single slice shrinks to what its regions use (border included), rounded up to a multiple of 4, then rounds up
+   to powers of two with `--pot` and to a square with `--square`. Every slice of a multi-page atlas is the full
+   `--width` by `--height`, rounded down to a multiple of 4.
+
+Since every cell and every side is a multiple of 4, a block of a compressed format never holds two regions, and
+`--no-pot` works with a block format. The first two mip levels below the base never mix two regions either, though
+bilinear filtering still reads across a cell's edge. A fresh pack can place regions a few pixels away from where an
+older Studio put them. A tracker built without `--repack` keeps its places.
 
 ### 3.2 Padding and extrusion
 
@@ -125,6 +135,10 @@ Studio pack Sprites/ --output Atlas/Sprites.json --padding 2 --extrude 1 --no-li
 
 For mipmapped atlases, give each region more extrusion and padding the deeper the chain goes. Two pixels hold up to
 about the second mip level.
+
+With `--transparent`, every fully clear texel inside a region's cell, its extrusion and padding included, takes the
+colour of the nearest visible texel, and its alpha stays 0. The clear space around a sprite then holds the sprite's
+own edge colour, so filtering and mips show no dark fringe.
 
 ### 3.3 Format of the atlas
 
@@ -156,7 +170,12 @@ Every region gets a slice of its own, in the order the sources were given. The t
 - `--headroom <n>` rounds the slice count up to a multiple of `n`, leaving blank slices (filled with `--fill`) for
   regions you add later without changing the array's depth.
 
-Resizing (for `Stretch` and `Contain`) is a box filter over `RGBA32Float`.
+Resizing (for `Stretch` and `Contain`) is a box filter over linear `RGBA32Float`, each source texel weighed by the
+share of a target texel it covers. Array slices are not rounded to a multiple of 4, so give a block format an
+`--extent` whose sides are.
+
+The tracker stores the mode as `"Mode": "Array"`, and the fit when it is not `Stretch`, so `build --repack` lays
+the array out the same way.
 
 ---
 
@@ -182,7 +201,6 @@ The tracker is JSON, four-space indented. Revision `1` (`Texture::Tracker::kVers
         {
             "Name": "hero",
             "Source": "../Sprites/hero.png",
-            "From": [0, 0, 48, 48],
             "Slice": 0,
             "Rect": [1, 1, 48, 48],
             "Crop": [0.0078125, 0.015625, 0.3828125, 0.765625]
@@ -190,7 +208,6 @@ The tracker is JSON, four-space indented. Revision `1` (`Texture::Tracker::kVers
         {
             "Name": "coin",
             "Source": "../Sprites/coin.png",
-            "From": [0, 0, 16, 16],
             "Slice": 0,
             "Rect": [53, 1, 16, 16],
             "Crop": [0.4140625, 0.015625, 0.5390625, 0.265625]
@@ -214,6 +231,11 @@ The tracker is JSON, four-space indented. Revision `1` (`Texture::Tracker::kVers
 | `Mipmaps` | bool | `false` | `true` to write a full mip chain. Always written |
 | `Linear` | bool | `true` | `true` to read the sources as linear values, `false` for sRGB colour art. Always written |
 | `Compress` | bool | `true` | `true` to LZ4-compress the payload when it comes out smaller. Always written |
+| `Mode` | string | `Atlas` | `Atlas` or `Array`, the way the regions were laid out, kept by `build --repack`. Written only when `Array` |
+| `Fit` | string | `Stretch` | `Stretch`, `Center` or `Contain`, the way an array's regions were sized to their slices. Written only when not `Stretch` |
+| `Opacity` | bool | `false` | `true` when alpha is opacity (`--transparent`). Written only when `true` |
+| `Cutoff` | number | `0` | The alpha test value every mip keeps its coverage at (`--cutoff`), 0 for off. Written only when above 0 |
+| `Normal` | bool | `false` | `true` to renormalise every mip of a normal map (`--normal`). Written only when `true` |
 | `Headroom` | number | `1` | Array slice count multiple. Written only when above 1 |
 | `Fill` | `[r, g, b, a]` bytes | transparent | Colour of uncovered pixels, as stored. Written only when not transparent |
 | `Regions` | array | empty | The regions, in authored order |
@@ -225,16 +247,21 @@ The tracker is JSON, four-space indented. Revision `1` (`Texture::Tracker::kVers
 | `Name` | string | empty | The name a game looks the image up by |
 | `Source` | string | (required) | The source image, relative to the tracker's folder |
 | `Layer` | number | `0` | The slice of the source taken. Written only when above 0 |
-| `From` | `[x, y, w, h]` | whole source | The part of the source taken, in source pixels |
+| `From` | `[x, y, w, h]` | whole source | The part of the source taken, in source pixels. Left out for the whole source |
 | `Slice` | number | `0` | The slice of the texture the region sits on |
-| `Rect` | `[x, y, w, h]` | `From`'s size at 0,0 | The place the region takes on its slice, in pixels. The image is resized to it |
+| `Rect` | `[x, y, w, h]` | the source's size, or `From`'s, at 0,0 | The place the region takes on its slice, in pixels. The image is resized to it |
 | `Channels` | object | none | Channels read from other images, see 6 |
 | `Retired` | bool | `false` | Kept and drawn, flagged for the game as no longer offered. Written only when `true` |
 | `Crop` | `[u0, v0, u1, v1]` | (written only) | `Rect` as fractions of the slice, left, top, right, bottom |
 
 Notes:
 
-- `pack` measures every region, so `From` is always written after a pack, even for whole images.
+- `pack` writes no `From` for a region that takes its whole source. Such a region takes its source whole at every
+  `build`, resized into its `Rect` if the source changed size, and `build --repack` gives it a `Rect` of the new
+  size.
+- A tracker written by an older Studio stores `From` for whole sources too, which freezes the source's old size. A
+  source that grew is cropped to it, and one that shrank is refused. Delete those `From` keys to let the regions
+  follow their sources.
 - `Crop` is output only. `build` ignores it and writes it again from `Rect`, so edit `Rect`, never `Crop`.
 - An area is `[x, y, width, height]` in whole pixels from the top-left. An area with a zero side is invalid and
   reads as "not set".
@@ -253,7 +280,6 @@ colour image's alpha.
 {
     "Name": "Crate_Surface",
     "Source": "../Art/Crate_Roughness.png",
-    "From": [0, 0, 512, 512],
     "Slice": 0,
     "Rect": [0, 0, 512, 512],
     "Channels": {
@@ -265,9 +291,10 @@ colour image's alpha.
 ```
 
 - `Channels` is keyed by the channel of the region written: `R`, `G`, `B` or `A` (upper case). A key may appear
-  once, so one region never writes the same channel twice.
+  once, so one region never writes the same channel twice. Any other key writes nothing and is named in the warning
+  `region <n> of '<tracker>' has a channel key other than R, G, B or A, which is ignored`.
 - `Source` is the image the channel is read from, relative to the tracker. It is always read as **linear data**,
-  whatever `--linear` says, since it holds values, not colour.
+  plain numbers whatever `--linear` or the atlas's format says, since it holds values, not colour.
 - `Channel` is the channel of that image read: `R`, `G`, `B` or `A` (either case). Default `R`.
 - The whole of the channel's source is fitted to the region's `Rect` (resized if needed), then the channel is copied
   in, after the region's own image is drawn and fitted.
@@ -289,8 +316,9 @@ Studio build <tracker.json> [--repack] [switches]
 ### 7.1 What it does
 
 1. Reads the tracker. Version must be `1`, every region must name a `Source`.
-2. `--format`, `--fill`, `--headroom`, `--mipmaps`, `--linear` and `--compressed` (or their `--no-` forms) typed on
-   the command line replace the tracker's own. The tracker is written back with the values used.
+2. `--format`, `--fill`, `--headroom`, `--mipmaps`, `--linear`, `--compressed`, `--transparent`, `--cutoff` and
+   `--normal` (or their `--no-` forms) typed on the command line replace the tracker's own. The tracker is written
+   back with the values used.
 3. With `--repack`, every region's `Slice` and `Rect` are cleared and the regions are placed again (see 7.3).
 4. Warns, without failing, when two regions on one slice overlap: `'a' and 'b' overlap on slice 0; the later one is
    drawn on top`.
@@ -300,6 +328,7 @@ What `build` refuses:
 
 | Error | Cause |
 |---|---|
+| `'<tracker>' is not valid JSON: <where>` | A hand edit broke the JSON. The message says where |
 | `the tracker has no extent to draw into; pack it first` | `Width`, `Height` or `Slices` is 0 |
 | `'<name>' sits on slice N of a flat texture, which has only one` | A `Texture2D` tracker with a region past slice 0 |
 | `'<name>' sits outside its WxH slice` | A `Rect` past the slice's edge |
@@ -311,24 +340,34 @@ so adding a region on a new slice just works. A flat atlas does not grow.
 
 ### 7.2 What `build` remembers
 
-The tracker holds `Format`, `Padding`, `Extrude`, `Fill`, `Headroom`, `Mipmaps`, `Linear` and `Compress`. `pack`
-stores the `--mipmaps`, `--linear` and `--compressed` settings it baked with, and `build` uses them unless the
-command line names one. A plain `Studio build <tracker.json>` therefore writes the texture as `pack` did.
+The tracker holds `Format`, `Layout`, `Mode`, `Fit`, `Padding`, `Extrude`, `Fill`, `Headroom`, `Mipmaps`,
+`Linear`, `Compress`, `Opacity`, `Cutoff` and `Normal`. `pack` stores the `--mipmaps`, `--linear`, `--compressed`,
+`--transparent`, `--cutoff` and `--normal` settings it baked with, and `build` uses them unless the command line
+names one. A plain `Studio build <tracker.json>` therefore writes the texture as `pack` did.
 
-A tracker written before these keys existed reads as `Mipmaps` off, `Linear` on and `Compress` on. Pass the switches
-to its first `build` once, and the tracker keeps them from then on.
+A tracker written before these keys existed reads as `Mipmaps` off, `Linear` on, `Compress` on, `Mode` `Atlas`, and
+`Opacity`, `Cutoff` and `Normal` off. Pass the switches to its first `build` once, and the tracker keeps them from
+then on.
 
-`--layered` is the one texture switch not stored. Left out of `build`, a flat atlas is written as `Texture2D`. Once
-a layered build has run, the tracker's `Layout` is `Texture2DArray` and stays so.
+`--layered` is not stored as a key of its own. The tracker's `Layout` records it instead. Left out of `build`, a
+flat atlas is written as `Texture2D`, and a layered one keeps its `Texture2DArray` layout, through a `--repack` too.
 
 ### 7.3 `--repack`
 
-`--repack` places every region again, reading the pack switches from the command line:
+`--repack` places every region again. It keeps the layout the tracker was packed with, unless the command line
+changes it:
 
-- `--padding` and `--extrude` carry over from the tracker unless typed.
-- `--mode`, `--width`, `--height`, `--extent`, `--fit`, `--pot`, `--square` and `--pages` are read **with their
-  defaults**. An array tracker repacked without `--mode Array` is repacked as an atlas. Retype every pack switch you
-  used.
+- `--mode` carries over from the tracker's `Mode` unless typed.
+- With the mode unchanged, `--fit`, `--padding` and `--extrude` carry over unless typed. An array keeps its slice
+  size unless `--extent` is typed. A paged atlas (more than one slice) keeps `--pages` on, and its page size as the
+  `--width` and `--height` cap. Any other atlas is capped by a typed `--width` and `--height`, or else by the larger
+  of its own size and 2048.
+- A typed `--mode` that changes the mode reads every pack switch from the command line, with the new mode's
+  defaults.
+- `--pot` and `--square` are always read from the command line, with their defaults. Retype `--no-pot` or
+  `--square` if the pack used them.
+- A tracker written before `Mode` was stored reads as an atlas. Give its first repack `--mode Array` if it is an
+  array.
 - `From` crops are kept, so a region keeps its crop and only its place changes.
 
 ### 7.4 Typical edits
@@ -341,7 +380,7 @@ a layered build has run, the tracker's `Layout` is `Texture2DArray` and stays so
 | Take one slice of an array source | Set `Layer` |
 | Recolour the empty space | `--fill` on `build`, or set `Fill` |
 | Leave room in an array | `--headroom 8` on `build` |
-| Change format | `--format BC7UIntNorm_sRGB` on `build` (sides must be multiples of four) |
+| Change format | `--format BC7UIntNorm_sRGB` on `build` (an atlas's sides always are multiples of four, an array's slices must be) |
 
 ---
 
@@ -402,7 +441,10 @@ struct Tracker
     static constexpr UInt32 kVersion = 1;
     Str Texture; ZyGraphic::TextureLayout Layout; ZyGraphic::TextureFormat Format;
     Bool Mipmaps = false; Bool Linear = true; Bool Compress = true;
-    UInt16 Width, Height, Slices = 1, Padding, Extrude, Headroom = 1; IntColor8 Fill; Sequence<Region> Regions;
+    Bool Opacity = false; Real32 Cutoff = 0.0f; Bool Normal = false;
+    UInt16 Width, Height, Slices = 1, Padding, Extrude;
+    Packer::Mode Mode = Packer::Mode::Atlas; Packer::Fitting Fit = Packer::Fitting::Stretch;
+    UInt16 Headroom = 1; IntColor8 Fill; Sequence<Region> Regions;
 
     UInt16      GetDepth() const;
     static Bool Read(Text Path, Ref<Tracker> Output);
@@ -431,14 +473,15 @@ struct Packer::Settings
 static Bool Packer::Pack(Ref<Tracker> Atlas, ConstRef<Settings> Settings);
 ```
 
-`Pack` places regions that are already measured (their `Rect` holds their size).
+`Pack` places regions that are already measured (their `Rect` holds their size), and sets the tracker's `Mode`
+and `Fit` to the ones it packed with.
 
 ### 10.3 `Composer`
 
 ```cpp
 Composer(ConstRef<Baker> Baker, Text Folder, ConstRef<Profile> Profile);
 
-Bool   Measure(Ref<Tracker> Atlas);                                // fill From and Rect sizes from the sources
+Bool   Measure(Ref<Tracker> Atlas);                                // fill Rect sizes from the sources or From
 Bool   Compose(Ref<Tracker> Atlas, Ref<Sequence<Bitmap>> Output);  // draw every slice
 Blob   Bake(Ref<Tracker> Atlas);                                   // draw and encode as .tex bytes
 Bool   Build(Ref<Tracker> Atlas);                                  // draw, encode and write the tracker's Texture
@@ -463,6 +506,9 @@ Atlas.Texture  = "Icons.tex";
 Atlas.Mipmaps  = Settings.Mipmaps;   // kept so a later `build` writes it the same way
 Atlas.Linear   = Settings.Linear;
 Atlas.Compress = Settings.Compress;
+Atlas.Opacity  = Settings.Opacity;
+Atlas.Cutoff   = Settings.Cutoff;
+Atlas.Normal   = Settings.Normal;
 
 for (const Text Name : { "sword"_Text, "shield"_Text, "potion"_Text })
 {
@@ -494,9 +540,13 @@ if (Drawer.Measure(Atlas) && Studio::Texture::Packer::Pack(Atlas, Layout) && Dra
 | `does not fit a 2048x2048 slice, and '--pages' is off` | Too much art for one slice | `--pages`, or raise `--width` / `--height` |
 | Neighbouring sprites bleed at the edges | No padding or extrusion with filtering or mips | `--padding 2 --extrude 1` or more |
 | Colours change or mips vanish after `build` | A tracker from before `Mipmaps` and `Linear` were stored | Pass `--no-linear` or `--mipmaps` to one `build`, which writes them into the tracker |
-| `is not a choice '--mode' takes` | A misspelt `--mode` or `--fit` | Check the spelling |
+| `is not a value '--mode' takes` | A misspelt `--mode` or `--fit` | Check the spelling |
 | `'--square' needs '--width' and '--height' to match` | `--square` with unequal limits | Give both the same value |
-| An array turned into an atlas | `build --repack` without `--mode Array` | Retype every pack switch with `--repack` |
+| An array turned into an atlas | `build --repack` on a tracker written before `Mode` was stored | `--mode Array` on that first repack |
+| A repacked atlas grew to a power of two, or stopped being square | `--pot` and `--square` are not stored | Retype `--no-pot` or `--square` with `--repack` |
+| A resized source shows its old crop | An older tracker stores the whole source as `From` | Delete that region's `From` |
+| Dark fringe around sprites under filtering | Clear texels hold black that filtering mixes in | `--transparent` on `pack` or `build` |
+| `is not valid JSON` | A hand edit broke the tracker | Fix the place the message names |
 | Old output packed into a new atlas | A `.tex` inside a source folder | Keep baked files elsewhere |
 | A hand-edited `Crop` was lost | `Crop` is written from `Rect` | Edit `Rect` |
 | A centred array region is refused | `--fit Center` with a region larger than the slice | `--fit Contain` or a larger `--extent` |
@@ -509,5 +559,5 @@ if (Drawer.Measure(Atlas) && Studio::Texture::Packer::Pack(Atlas, Layout) && Dra
 |---|---|
 | `Library/Texture/Source/Texture/Atlas/Tracker.hpp`, `Tracker.cpp` | The tracker structs, JSON reading and writing, path relating |
 | `Library/Texture/Source/Texture/Atlas/Packer.hpp`, `Packer.cpp` | Atlas (MaxRects) and array placement |
-| `Library/Texture/Source/Texture/Atlas/Composer.hpp`, `Composer.cpp` | Measuring, drawing, extrusion, channel splicing |
+| `Library/Texture/Source/Texture/Atlas/Composer.hpp`, `Composer.cpp` | Measuring, drawing, extrusion, colour bleed under `--transparent`, channel splicing |
 | `Application/Source/Console.cpp` | `Pack`, `Build`, `Collect`, `ReadTracker` |

@@ -70,9 +70,10 @@ Studio bake Art/Knight/Knight_Albedo.png Content/Knight/Knight_Albedo.tex --pres
 Studio bake Art/Knight/Knight_Normal.png Content/Knight/Knight_Normal.tex --preset normal
 ```
 
-- The `sprite` preset is `--layered --no-linear --mipmaps`: sRGB colour, a full chain, a one-slice array. Drop
-  `--layered` (`--no-layered`) if your model shader samples plain 2D textures.
-- The `normal` preset keeps the normal map linear.
+- The `sprite` preset is `--layered --no-linear --mipmaps --transparent`: sRGB colour, a full chain whose colour is
+  weighed by alpha, a one-slice array. Drop `--layered` (`--no-layered`) if your model shader samples plain 2D
+  textures.
+- The `normal` preset keeps the normal map linear and renormalises every mip level (`--normal`).
 
 ### 1.5 Tidy the manifest
 
@@ -145,8 +146,8 @@ Append a region to `Colour.json`, on the first blank slice:
 { "Name": "snow", "Source": "../../Art/Ground/Colour/snow.png", "Slice": 6 }
 ```
 
-`Rect` and `From` are filled in when the region is measured, but for an array the region must fit its slice. Give
-`Rect` explicitly when the image is not 1024x1024:
+`Rect` is filled in from the image's size when the region is measured, but for an array the region must fit its
+slice. Give `Rect` explicitly when the image is not 1024x1024:
 
 ```json
 { "Name": "snow", "Source": "../../Art/Ground/Colour/snow.png", "Slice": 6, "Rect": [0, 0, 1024, 1024] }
@@ -242,6 +243,10 @@ exit $failed
 ```
 
 - Each file is baked on its own, so one bad file does not stop the rest.
+- When one preset fits a whole folder, one run does the same:
+  `Studio bake Art/Audio/Effects --output Content/Audio/Effects --presets Studio.json --preset effect`. A folder
+  gives every file in it that a baker reads, its images and fonts too, and the run bakes them in parallel. One bad
+  file does not stop the rest there either, and the run exits `1` if any failed.
 - Studio exits `1` for a broken asset and `2` for a broken command line. A `2` in a script like this usually means a
   preset name or switch is wrong for every file.
 - Sources at 44.1 kHz are resampled to 48 kHz. Sources with more than two channels fail. Downmix them first.
@@ -278,7 +283,6 @@ Edit the region in `Knight_Surface.json`:
 {
     "Name": "Knight_Roughness",
     "Source": "../../Art/Knight/Knight_Roughness.png",
-    "From": [0, 0, 2048, 2048],
     "Slice": 0,
     "Rect": [0, 0, 2048, 2048],
     "Channels": {
@@ -359,8 +363,11 @@ Studio build Content/UI/Atlas.json --repack --presets Studio.json --preset ui
 ```
 
 The tracker already keeps the preset's `linear` and `mipmaps`, so the preset on `build` only guards against a
-tracker written before Studio stored them. `--repack` keeps the tracker's padding and extrusion. Images added since
-the first pack must be appended to the tracker as regions first. `build` only draws what the tracker lists.
+tracker written before Studio stored them. `--repack` keeps the tracker's mode, padding and extrusion. Images added
+since the first pack must be appended to the tracker as regions first. `build` only draws what the tracker lists.
+
+If the art has soft or cut-out edges, add `"transparent": true` to the preset, so the clear space around each image
+takes its edge colour and filtering shows no dark fringe.
 
 ---
 
@@ -371,7 +378,8 @@ Studio bake Art/Sky/Sky_Cross.hdr Content/Sky/Sky.tex --cube 4x3 --format RGBA16
 ```
 
 - The source is a horizontal cross: four faces across, three down, each face square.
-- HDR sources decode as 32-bit float. `RGBA16Float` halves the size.
+- HDR sources decode as 32-bit float and are stored as `RGBA16Float` when no `--format` is given, half the size of
+  `RGBA32Float`. The `--format` here only makes that explicit.
 - Mips give the shader a cheap blurred lookup for rough reflections.
 
 ---
